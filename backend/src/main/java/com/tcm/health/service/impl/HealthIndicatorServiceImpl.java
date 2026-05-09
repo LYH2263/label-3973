@@ -5,13 +5,18 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.tcm.health.dto.HealthIndicatorDTO;
 import com.tcm.health.entity.HealthIndicator;
 import com.tcm.health.mapper.HealthIndicatorMapper;
+import com.tcm.health.service.HealthAlertService;
 import com.tcm.health.service.HealthIndicatorService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
 @Service
 public class HealthIndicatorServiceImpl extends ServiceImpl<HealthIndicatorMapper, HealthIndicator> implements HealthIndicatorService {
+
+    @Autowired
+    private HealthAlertService healthAlertService;
 
     @Override
     public List<HealthIndicator> listByRecordId(Long recordId) {
@@ -32,6 +37,7 @@ public class HealthIndicatorServiceImpl extends ServiceImpl<HealthIndicatorMappe
         indicator.setHeartRate(dto.getHeartRate());
         indicator.setRemark(dto.getRemark());
         save(indicator);
+        healthAlertService.detectAndSaveAlerts(indicator);
         return indicator;
     }
 
