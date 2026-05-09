@@ -8,6 +8,9 @@
         <el-button type="primary" :disabled="!selectedRecordId" @click="dialogVisible = true">
           <el-icon><Plus /></el-icon> 录入指标
         </el-button>
+        <el-button type="warning" :disabled="!selectedRecordId" @click="openAlertHistory">
+          <el-icon><Bell /></el-icon> 预警历史
+        </el-button>
       </div>
     </div>
 
@@ -16,7 +19,6 @@
     </div>
 
     <template v-else>
-      <!-- 最新指标概览 -->
       <el-row :gutter="16" class="indicator-summary" v-if="indicators.length > 0">
         <el-col :xs="12" :sm="8" :md="4" v-for="item in latestSummary" :key="item.label">
           <div class="summary-card" :class="item.status">
@@ -49,7 +51,7 @@
         <el-table-column label="血压(mmHg)" width="130">
           <template #default="{ row }">
             <span v-if="row.bloodPressureHigh">
-              <el-tag :type="bpStatus(row.bloodPressureHigh, row.bloodPressureLow)" size="small">
+              <el-tag :type="checkBloodPressureAbnormal(row.bloodPressureHigh, row.bloodPressureLow) ? checkBloodPressureAbnormal(row.bloodPressureHigh, row.bloodPressureLow).type : 'success'" size="small">
                 {{ row.bloodPressureHigh }}/{{ row.bloodPressureLow }}
               </el-tag>
             </span>
@@ -59,12 +61,33 @@
         <el-table-column label="血糖(mmol/L)" prop="bloodSugar" width="130">
           <template #default="{ row }">
             <span v-if="row.bloodSugar">
-              <el-tag :type="sugarStatus(row.bloodSugar)" size="small">{{ row.bloodSugar }}</el-tag>
+              <el-tag :type="checkBloodSugarAbnormal(row.bloodSugar) ? checkBloodSugarAbnormal(row.bloodSugar).type : 'success'" size="small">{{ row.bloodSugar }}</el-tag>
             </span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="心率(次/分)" prop="heartRate" width="110" />
+        <el-table-column label="心率(次/分)" width="110">
+          <template #default="{ row }">
+            <span v-if="row.heartRate">
+              <el-tag :type="checkHeartRateAbnormal(row.heartRate) ? checkHeartRateAbnormal(row.heartRate).type : 'success'" size="small">{{ row.heartRate }}</el-tag>
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="异常提示" min-width="180">
+          <template #default="{ row }">
+            <div class="abnormal-tags" v-if="detectIndicatorAbnormalTags(row).length > 0">
+              <el-tag
+                v-for="(tag, idx) in detectIndicatorAbnormalTags(row)"
+                :key="idx"
+                :type="tag.type"
+                size="small"
+                class="abnormal-tag"
+              >{{ tag.label }}</el-tag>
+            </div>
+            <span v-else class="normal-text">正常</span>
+          </template>
+        </el-table-column>
         <el-table-column label="备注" prop="remark" show-overflow-tooltip />
         <el-table-column label="操作" width="80" fixed="right">
           <template #default="{ row }">
@@ -74,7 +97,6 @@
       </el-table>
     </template>
 
-    <!-- 录入弹窗 -->
     <el-dialog v-model="dialogVisible" title="录入健康指标" width="500px" @close="resetForm">
       <el-form ref="formRef" :model="form" label-width="110px">
         <el-row :gutter="12">
@@ -122,6 +144,22 @@
         <el-button type="primary" :loading="submitting" @click="handleSubmit">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="alertDialogVisible" title="预警历史" width="700px">
+      <el-table :data="alerts" v-loading="alertLoading" border stripe style="width: 100%">
+        <el-table-column label="预警时间" width="160">
+          <template #default="{ row }">{{ formatDateTime(row.alertTime) }}</template>
+        </el-table-column>
+        <el-table-column label="指标类型" prop="indicatorType" width="100" />
+        <el-table-column label="异常级别" width="100">
+          <template #default="{ row }">
+            <el-tag :type="alertLevelType(row.alertLevel)" size="small">{{ alertLevelLabel(row.alertLevel) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="预警内容" prop="alertContent" show-overflow-tooltip />
+      </el-table>
+      <el-empty v-if="!alertLoading && alerts.length === 0" description="暂无预警记录" />
+    </el-dialog>
   </div>
 </template>
 
@@ -130,6 +168,16 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { recordApi } from '@/api/record'
 import { indicatorApi } from '@/api/indicator'
+import { alertApi } from '@/api/alert'
+import { useHealthAlertDetect } from '@/composables/useHealthAlertDetect'
+
+const {
+  checkBmiAbnormal,
+  checkBloodPressureAbnormal,
+  checkBloodSugarAbnormal,
+  checkHeartRateAbnormal,
+  detectIndicatorAbnormalTags
+} = useHealthAlertDetect()
 
 const records = ref([])
 const selectedRecordId = ref(null)
@@ -138,6 +186,10 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 const submitting = ref(false)
 const formRef = ref()
+
+const alertDialogVisible = ref(false)
+const alerts = ref([])
+const alertLoading = ref(false)
 
 const form = reactive({
   recordId: null, height: null, weight: null,
@@ -155,16 +207,14 @@ function calcBMI(row) {
   return bmi.toFixed(1)
 }
 
-function bpStatus(high, low) {
-  if (high >= 140 || low >= 90) return 'danger'
-  if (high >= 130 || low >= 80) return 'warning'
-  return 'success'
+function alertLevelType(level) {
+  const map = { danger: 'danger', warning: 'warning', info: 'info' }
+  return map[level] || 'info'
 }
 
-function sugarStatus(val) {
-  if (val >= 7.0) return 'danger'
-  if (val >= 6.1) return 'warning'
-  return 'success'
+function alertLevelLabel(level) {
+  const map = { danger: '高风险', warning: '警告', info: '提示' }
+  return map[level] || level
 }
 
 const latestSummary = computed(() => {
@@ -173,19 +223,23 @@ const latestSummary = computed(() => {
   const items = []
   if (latest.height && latest.weight) {
     const bmi = (latest.weight / ((latest.height / 100) ** 2)).toFixed(1)
-    items.push({ label: 'BMI', value: bmi, icon: '⚖️', status: bmi < 18.5 || bmi >= 24 ? 'warn' : 'good' })
+    const bmiAbnormal = checkBmiAbnormal(latest.height, latest.weight)
+    items.push({ label: 'BMI', value: bmi, icon: '⚖️', status: bmiAbnormal ? (bmiAbnormal.type === 'danger' ? 'bad' : 'warn') : 'good' })
   }
   if (latest.bloodPressureHigh) {
+    const bpAbnormal = checkBloodPressureAbnormal(latest.bloodPressureHigh, latest.bloodPressureLow)
     items.push({
       label: '血压', value: `${latest.bloodPressureHigh}/${latest.bloodPressureLow}`,
-      icon: '🩺', status: latest.bloodPressureHigh >= 140 ? 'bad' : 'good'
+      icon: '🩺', status: bpAbnormal ? (bpAbnormal.type === 'danger' ? 'bad' : 'warn') : 'good'
     })
   }
   if (latest.bloodSugar) {
-    items.push({ label: '血糖', value: latest.bloodSugar, icon: '🩸', status: latest.bloodSugar >= 7 ? 'bad' : 'good' })
+    const sugarAbnormal = checkBloodSugarAbnormal(latest.bloodSugar)
+    items.push({ label: '血糖', value: latest.bloodSugar, icon: '🩸', status: sugarAbnormal ? (sugarAbnormal.type === 'danger' ? 'bad' : 'warn') : 'good' })
   }
   if (latest.heartRate) {
-    items.push({ label: '心率', value: latest.heartRate, icon: '❤️', status: latest.heartRate > 100 || latest.heartRate < 60 ? 'warn' : 'good' })
+    const hrAbnormal = checkHeartRateAbnormal(latest.heartRate)
+    items.push({ label: '心率', value: latest.heartRate, icon: '❤️', status: hrAbnormal ? 'warn' : 'good' })
   }
   return items
 })
@@ -203,6 +257,18 @@ async function loadIndicators() {
     indicators.value = res.data || []
   } finally {
     loading.value = false
+  }
+}
+
+async function openAlertHistory() {
+  if (!selectedRecordId.value) return
+  alertDialogVisible.value = true
+  alertLoading.value = true
+  try {
+    const res = await alertApi.list(selectedRecordId.value)
+    alerts.value = res.data || []
+  } finally {
+    alertLoading.value = false
   }
 }
 
@@ -281,5 +347,20 @@ onMounted(loadRecords)
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.abnormal-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.abnormal-tag {
+  margin: 0;
+}
+
+.normal-text {
+  color: #67c23a;
+  font-size: 13px;
 }
 </style>
