@@ -9,6 +9,11 @@
           <el-icon><Plus /></el-icon> 录入指标
         </el-button>
       </div>
+      <div class="toolbar-right">
+        <el-button :disabled="!selectedRecordId" @click="openAlertDialog">
+          <el-icon><Bell /></el-icon> 预警历史
+        </el-button>
+      </div>
     </div>
 
     <div v-if="!selectedRecordId" class="hint-card">
@@ -16,7 +21,6 @@
     </div>
 
     <template v-else>
-      <!-- 最新指标概览 -->
       <el-row :gutter="16" class="indicator-summary" v-if="indicators.length > 0">
         <el-col :xs="12" :sm="8" :md="4" v-for="item in latestSummary" :key="item.label">
           <div class="summary-card" :class="item.status">
@@ -40,31 +44,58 @@
         </el-table-column>
         <el-table-column label="身高(cm)" prop="height" width="100" />
         <el-table-column label="体重(kg)" prop="weight" width="100" />
-        <el-table-column label="BMI" width="90">
+        <el-table-column label="BMI" width="110">
           <template #default="{ row }">
-            <span v-if="row.height && row.weight">{{ calcBMI(row) }}</span>
+            <span v-if="row.height && row.weight">
+              <el-tag :type="checkBmiStatus(row.height, row.weight).type" size="small">
+                {{ checkBmiStatus(row.height, row.weight).bmi }}
+              </el-tag>
+            </span>
             <span v-else>-</span>
           </template>
         </el-table-column>
         <el-table-column label="血压(mmHg)" width="130">
           <template #default="{ row }">
             <span v-if="row.bloodPressureHigh">
-              <el-tag :type="bpStatus(row.bloodPressureHigh, row.bloodPressureLow)" size="small">
+              <el-tag :type="checkBloodPressureStatus(row.bloodPressureHigh, row.bloodPressureLow).type" size="small">
                 {{ row.bloodPressureHigh }}/{{ row.bloodPressureLow }}
               </el-tag>
             </span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="血糖(mmol/L)" prop="bloodSugar" width="130">
+        <el-table-column label="血糖(mmol/L)" width="130">
           <template #default="{ row }">
             <span v-if="row.bloodSugar">
-              <el-tag :type="sugarStatus(row.bloodSugar)" size="small">{{ row.bloodSugar }}</el-tag>
+              <el-tag :type="checkBloodSugarStatus(row.bloodSugar).type" size="small">{{ row.bloodSugar }}</el-tag>
             </span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="心率(次/分)" prop="heartRate" width="110" />
+        <el-table-column label="心率(次/分)" width="130">
+          <template #default="{ row }">
+            <span v-if="row.heartRate">
+              <el-tag :type="checkHeartRateStatus(row.heartRate).type" size="small">{{ row.heartRate }}</el-tag>
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="异常提示" min-width="180">
+          <template #default="{ row }">
+            <div class="abnormal-tags">
+              <el-tag
+                v-for="(abn, idx) in detectAllAbnormalities(row)"
+                :key="idx"
+                :type="abn.type"
+                size="small"
+                style="margin-right: 4px; margin-bottom: 4px;"
+              >
+                {{ abn.label }}
+              </el-tag>
+              <span v-if="detectAllAbnormalities(row).length === 0" class="text-normal">正常</span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="备注" prop="remark" show-overflow-tooltip />
         <el-table-column label="操作" width="80" fixed="right">
           <template #default="{ row }">
@@ -74,7 +105,6 @@
       </el-table>
     </template>
 
-    <!-- 录入弹窗 -->
     <el-dialog v-model="dialogVisible" title="录入健康指标" width="500px" @close="resetForm">
       <el-form ref="formRef" :model="form" label-width="110px">
         <el-row :gutter="12">
@@ -122,20 +152,52 @@
         <el-button type="primary" :loading="submitting" @click="handleSubmit">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="alertDialogVisible" title="预警历史" width="600px">
+      <el-table :data="alerts" v-loading="alertLoading" border stripe style="width: 100%">
+        <el-table-column label="预警时间" width="160">
+          <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
+        </el-table-column>
+        <el-table-column label="指标类型" prop="indicatorType" width="100" />
+        <el-table-column label="预警级别" width="100">
+          <template #default="{ row }">
+            <el-tag :type="getAlertTagType(row.alertLevel)" size="small">{{ row.alertLevel }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="预警内容" prop="content" show-overflow-tooltip />
+      </el-table>
+      <div v-if="alerts.length === 0 && !alertLoading" class="empty-hint">
+        <el-empty description="暂无预警记录" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Bell } from '@element-plus/icons-vue'
 import { recordApi } from '@/api/record'
 import { indicatorApi } from '@/api/indicator'
+import { useHealthDetection } from '@/composables/useHealthDetection'
+
+const {
+  checkBmiStatus,
+  checkHeartRateStatus,
+  checkBloodPressureStatus,
+  checkBloodSugarStatus,
+  detectAllAbnormalities,
+  getAlertTagType
+} = useHealthDetection()
 
 const records = ref([])
 const selectedRecordId = ref(null)
 const indicators = ref([])
 const loading = ref(false)
 const dialogVisible = ref(false)
+const alertDialogVisible = ref(false)
+const alerts = ref([])
+const alertLoading = ref(false)
 const submitting = ref(false)
 const formRef = ref()
 
@@ -148,23 +210,6 @@ const form = reactive({
 function formatDateTime(str) {
   if (!str) return '-'
   return new Date(str).toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-')
-}
-
-function calcBMI(row) {
-  const bmi = row.weight / ((row.height / 100) ** 2)
-  return bmi.toFixed(1)
-}
-
-function bpStatus(high, low) {
-  if (high >= 140 || low >= 90) return 'danger'
-  if (high >= 130 || low >= 80) return 'warning'
-  return 'success'
-}
-
-function sugarStatus(val) {
-  if (val >= 7.0) return 'danger'
-  if (val >= 6.1) return 'warning'
-  return 'success'
 }
 
 const latestSummary = computed(() => {
@@ -235,6 +280,19 @@ async function handleDelete(id) {
   loadIndicators()
 }
 
+async function openAlertDialog() {
+  if (!selectedRecordId.value) return
+  alertDialogVisible.value = true
+  alerts.value = []
+  alertLoading.value = true
+  try {
+    const res = await indicatorApi.listAlerts(selectedRecordId.value)
+    alerts.value = res.data || []
+  } finally {
+    alertLoading.value = false
+  }
+}
+
 onMounted(loadRecords)
 </script>
 
@@ -247,6 +305,7 @@ onMounted(loadRecords)
 }
 
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
+.toolbar-right { display: flex; align-items: center; gap: 12px; }
 
 .hint-card {
   background: white;
@@ -282,4 +341,8 @@ onMounted(loadRecords)
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
+
+.abnormal-tags { display: flex; flex-wrap: wrap; }
+.text-normal { color: #909399; font-size: 12px; }
+.empty-hint { margin-top: 20px; }
 </style>

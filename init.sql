@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS `health_indicator` (
   KEY `idx_record_id` (`record_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `health_alert` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `record_id` bigint NOT NULL,
+  `indicator_type` varchar(50) NOT NULL,
+  `alert_level` varchar(50) NOT NULL,
+  `content` varchar(500) NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_record_id` (`record_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `constitution_question` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `constitution_type` varchar(20) NOT NULL,
